@@ -2979,6 +2979,10 @@ img.poster.fallback-applied, .home-card-poster-wrap img.fallback-applied {
         <span class="drawer-icon">🎬</span>
         <span class="drawer-label">قائمة الأنميشن</span>
       </div>
+      <div class="drawer-item" data-page="coming-soon" onclick="navFromDrawer('coming-soon')">
+        <span class="drawer-icon">⏳</span>
+        <span class="drawer-label">قادم قريبًا</span>
+      </div>
       <div class="drawer-item" data-page="favorites" onclick="navFromDrawer('favorites')">
         <span class="drawer-icon">♥</span>
         <span class="drawer-label">المفضلة</span>
@@ -6632,20 +6636,42 @@ window.renderStatsPage = function() {
 };
 
 window.renderComingSoonPage = function() {
-  setActiveNav("coming");
+  setActiveNav("coming-soon");
+
+  // Filter unreleased / upcoming works without altering any original data or other pages
+  const upcomingItems = (window.allContent || []).filter(item => {
+    if (!item) return false;
+    return window.isUpcomingItem(item);
+  });
+
+  const countBadge = (upcomingItems.length > 0)
+    ? `<span style="display:inline-block;margin-right:8px;background:rgba(251,191,36,0.2);color:#fbbf24;border:1px solid rgba(251,191,36,0.35);padding:2px 8px;border-radius:12px;font-size:12px;font-weight:bold">${upcomingItems.length} عمل</span>`
+    : '';
+
   main.innerHTML = `
     <div class="page-header"><button class="back-btn" onclick="goBack()">${t("back_btn")}</button></div>
     <div class="section-banner">
       <span style="font-size:32px">⏳</span>
       <div>
-        <h1 style="font-size:22px;font-weight:900">قادم قريبًا</h1>
-        <p style="font-size:12px;color:#888;margin-top:2px">أعمال ومواسم جديدة ينتظرها عشاق الأنمي حول العالم</p>
+        <h1 style="font-size:22px;font-weight:900;display:flex;align-items:center;gap:6px">
+          <span>قادم قريبًا</span>
+          ${countBadge}
+        </h1>
+        <p style="font-size:12px;color:#888;margin-top:2px">أعمال ومواسم جديدة لم تصدر بعد ينتظرها الجمهور</p>
       </div>
     </div>
 
-    <div class="movies-grid">
-      ${window.allContent.slice(0, 12).map(createCard).join("")}
-    </div>
+    ${upcomingItems.length === 0 ? `
+      <div style="padding:70px 20px;text-align:center;color:#888">
+        <div style="font-size:52px;margin-bottom:14px">⏳</div>
+        <h2 style="font-size:18px;font-weight:900;color:#fff;margin-bottom:6px">لا توجد أعمال قادمة حاليًا</h2>
+        <p style="font-size:13px;color:#aaa">سيتم إدراج الأنميات والمواسم الجديدة القادمة هنا فور الإعلان عنها.</p>
+      </div>
+    ` : `
+      <div class="movies-grid">
+        ${upcomingItems.map(createCard).join("")}
+      </div>
+    `}
   `;
 };
 
@@ -7093,12 +7119,183 @@ window.setActiveNav=(p)=>{
   }
 
   document.querySelectorAll(".drawer-item").forEach(item => {
-    if (item.getAttribute("data-page") === p) {
+    const pageAttr = item.getAttribute("data-page");
+    if (pageAttr === p || (p === "coming-soon" && pageAttr === "coming") || (p === "coming" && pageAttr === "coming-soon")) {
       item.classList.add("active");
     } else {
       item.classList.remove("active");
     }
   });
+};
+
+/* ================= Upcoming / Unreleased Content Filter Helper ================= */
+window.isUpcomingItem = function(item) {
+  if (!item) return false;
+  const status = String(item.status || "").trim().toLowerCase();
+  const releaseStatus = String(item.releaseStatus || "").trim().toLowerCase();
+
+  const isUpcomingStr = (s) => {
+    if (!s) return false;
+    return (
+      s === "لم يصدر بعد" ||
+      s === "لم يصدر" ||
+      s.includes("لم يصدر") ||
+      s === "upcoming" ||
+      s.includes("upcoming") ||
+      s === "not released" ||
+      s === "not_released" ||
+      s.includes("not released") ||
+      s === "unreleased" ||
+      s === "coming soon" ||
+      s === "coming_soon" ||
+      s.includes("coming soon") ||
+      s === "قريبا" ||
+      s === "قريباً" ||
+      s.includes("قادم")
+    );
+  };
+
+  return isUpcomingStr(status) || isUpcomingStr(releaseStatus);
+};
+
+/* ================= Reusable Content Classifier & Type Conflict Resolver ================= */
+window.classifyContentItem = function(item) {
+  if (!item) {
+    return {
+      isMovie: false,
+      isEpisodic: false,
+      hasEpisodes: false,
+      hasWatchLink: false,
+      episodeCount: 0,
+      primaryType: "unknown",
+      typeLabel: "مسلسل"
+    };
+  }
+
+  // 1. Episodes data analysis
+  const rawEpisodes = Array.isArray(item.episodes) ? item.episodes : [];
+  const epCount = rawEpisodes.length;
+
+  // Direct watch links on root (item.video / item.altUrl)
+  const hasDirectLink = Boolean((item.video || "").trim() || (item.altUrl || "").trim());
+
+  // Watch links inside episodes array
+  const hasEpisodeLink = rawEpisodes.some(ep => Boolean(ep && ((ep.video || "").trim() || (ep.altUrl || "").trim())));
+  const hasWatchLink = hasDirectLink || hasEpisodeLink;
+
+  // 2. Normalization of category, type, and genres
+  const cat = String(item.category || "").trim().toLowerCase();
+  const typ = String(item.type || "").trim().toLowerCase();
+  const genres = Array.isArray(item.genres) 
+    ? item.genres.map(g => String(g || "").trim().toLowerCase()) 
+    : (typeof item.genres === "string" ? item.genres.split(/[,،\s]+/).map(g => g.trim().toLowerCase()) : []);
+
+  // Pattern matchers for Arabic and English terminology
+  const isMovieWord = (s) => /^(فلم|فيلم|أفلام|افلام|movie|movies|film|films)$/i.test(s);
+  const isSeriesWord = (s) => /^(مسلسل|مسلسلات|أوفا|اوفا|أونا|اونا|خاصة|حلقات خاصة|series|tv series|tv_series|tv|show|shows|ova|ona|special|specials)$/i.test(s);
+  const isAnimeWord = (s) => /^(أنمي|انمي|anime)$/i.test(s);
+  const isAnimationWord = (s) => /^(أنميشن|انميشن|animation|cartoon|كرتون|رسوم متحركة)$/i.test(s);
+
+  const hasMovieIndicator = isMovieWord(cat) || isMovieWord(typ) || genres.some(isMovieWord);
+  const hasSeriesIndicator = isSeriesWord(cat) || isSeriesWord(typ) || genres.some(isSeriesWord);
+  const hasAnimeIndicator = isAnimeWord(cat) || isAnimeWord(typ) || genres.some(isAnimeWord);
+  const hasAnimationIndicator = isAnimationWord(cat) || isAnimationWord(typ) || genres.some(isAnimationWord);
+
+  // RULE 1: Any work with 2 or more episodes is ALWAYS EPISODIC (resolves mistaken "فلم" or "movies" classifications)
+  if (epCount >= 2) {
+    let typeLabel = "مسلسل";
+    if (hasAnimeIndicator) typeLabel = "الأنمي";
+    else if (hasAnimationIndicator) typeLabel = "الأنميشن";
+    else if (cat && !isMovieWord(cat)) typeLabel = item.category;
+
+    return {
+      isMovie: false,
+      isEpisodic: true,
+      hasEpisodes: true,
+      hasWatchLink: hasWatchLink,
+      episodeCount: epCount,
+      primaryType: hasAnimeIndicator ? "anime" : (hasAnimationIndicator ? "animation" : "series"),
+      typeLabel: typeLabel
+    };
+  }
+
+  // RULE 2: Explicit Series / TV series / OVA / Special indicators with 0 or 1 episode are episodic
+  if (hasSeriesIndicator) {
+    let typeLabel = "مسلسل";
+    if (hasAnimeIndicator) typeLabel = "الأنمي";
+    else if (hasAnimationIndicator) typeLabel = "الأنميشن";
+    else if (cat && !isMovieWord(cat)) typeLabel = item.category;
+
+    return {
+      isMovie: false,
+      isEpisodic: true,
+      hasEpisodes: epCount > 0,
+      hasWatchLink: hasWatchLink,
+      episodeCount: epCount,
+      primaryType: hasAnimeIndicator ? "anime" : (hasAnimationIndicator ? "animation" : "series"),
+      typeLabel: typeLabel
+    };
+  }
+
+  // RULE 3: Pure Standalone Movies
+  // If explicitly designated as a movie AND not identified as a multi-episode series
+  if (hasMovieIndicator) {
+    let typeLabel = "الفيلم";
+    if (hasAnimeIndicator) typeLabel = "فيلم أنمي";
+    else if (hasAnimationIndicator) typeLabel = "فيلم أنميشن";
+
+    return {
+      isMovie: true,
+      isEpisodic: false,
+      hasEpisodes: epCount > 0,
+      hasWatchLink: hasWatchLink,
+      episodeCount: epCount,
+      primaryType: "movie",
+      typeLabel: typeLabel
+    };
+  }
+
+  // RULE 4: Anime (default to series unless marked as movie)
+  if (hasAnimeIndicator) {
+    return {
+      isMovie: false,
+      isEpisodic: true,
+      hasEpisodes: epCount > 0,
+      hasWatchLink: hasWatchLink,
+      episodeCount: epCount,
+      primaryType: "anime",
+      typeLabel: "الأنمي"
+    };
+  }
+
+  // RULE 5: Animation (default to series unless marked as movie)
+  if (hasAnimationIndicator) {
+    return {
+      isMovie: false,
+      isEpisodic: true,
+      hasEpisodes: epCount > 0,
+      hasWatchLink: hasWatchLink,
+      episodeCount: epCount,
+      primaryType: "animation",
+      typeLabel: "الأنميشن"
+    };
+  }
+
+  // Fallback: If 1 direct link and not marked as series, treat as standalone movie; otherwise series
+  const fallbackIsMovie = (epCount <= 1 && hasDirectLink && !hasSeriesIndicator);
+  return {
+    isMovie: fallbackIsMovie,
+    isEpisodic: !fallbackIsMovie,
+    hasEpisodes: epCount > 0,
+    hasWatchLink: hasWatchLink,
+    episodeCount: epCount,
+    primaryType: fallbackIsMovie ? "movie" : "series",
+    typeLabel: fallbackIsMovie ? "الفيلم" : (item.category || "مسلسل")
+  };
+};
+
+window.isStandaloneMovie = function(item) {
+  return window.classifyContentItem(item).isMovie;
 };
 
 window.createCard = (item) => {
@@ -7118,24 +7315,9 @@ window.createCard = (item) => {
     ? `<button type="button" tabindex="0" style="width:100%;margin-top:6px;background:#1a2a3a;color:#00d2ff;border:1px solid #2a4a6a;padding:5px 6px;border-radius:8px;font-size:11px;font-weight:bold;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px" onclick="event.stopPropagation();openEditPosterModal('${item.firebaseId}')">🖼️ تعديل البوستر</button>`
     : "";
 
-  let isAnimation = item.type === "animation" || item.type === "arabic" || item.type === "sports";
-  let cat = (item.category || "").trim();
-
-  let redBadge = "مسلسل";
-  let metaCategory = "مسلسل";
-  if (cat === "فلم" || cat === "فيلم") {
-    redBadge = "الفيلم";
-    metaCategory = "فيلم";
-  } else if (cat) {
-    redBadge = cat;
-    metaCategory = cat;
-  } else if (isAnimation) {
-    redBadge = "الأنميشن";
-    metaCategory = "أنميشن";
-  } else {
-    redBadge = "أنمي";
-    metaCategory = "أنمي";
-  }
+  const classification = window.classifyContentItem(item);
+  let redBadge = classification.typeLabel;
+  let metaCategory = classification.isMovie ? "فيلم" : (classification.primaryType === "anime" ? "أنمي" : (classification.primaryType === "animation" ? "أنميشن" : "مسلسل"));
 
   let version = (window.getItemVersion ? window.getItemVersion(item) : (item.version || "")).trim();
   let versionBadgeHtml = "";
@@ -7765,18 +7947,10 @@ window.renderDetailsPage = function(fid) {
   let safeTitle = window.escapeDescHtml(item.title || "بدون عنوان");
   let yearText = item.year || 2024;
 
-  // Type badge label
-  let isMovie = (item.category === "فيلم" || item.category === "فلم" || item.type === "movies");
-  let typeLabel = "مسلسل";
-  if (isMovie) {
-    typeLabel = "الفيلم";
-  } else if (item.category === "أنميشن" || item.type === "animation") {
-    typeLabel = "الأنميشن";
-  } else if (item.category === "أنمي" || item.type === "anime") {
-    typeLabel = "الأنمي";
-  } else if (item.category && item.category !== "all") {
-    typeLabel = item.category;
-  }
+  // Type badge label & Classification (resolves conflict between category and episodes)
+  const classification = window.classifyContentItem(item);
+  let isMovie = classification.isMovie;
+  let typeLabel = classification.typeLabel;
 
   // Work Status (حالة العمل: مستمر / مكتمل / لم يصدر بعد)
   let rawStatus = (item.status || "").trim();
@@ -8329,29 +8503,43 @@ window.handleDetailsWatchClick = function(fid) {
   let item = getItemByFirebaseId(fid);
   if (!item) return;
 
-  let isMovie = (item.category === "فيلم" || item.category === "فلم" || item.type === "movies");
-  let episodes = Array.isArray(item.episodes) ? item.episodes : (item.video || item.altUrl ? [{ title: "الحلقة 1", video: item.video || "", altUrl: item.altUrl || "" }] : []);
+  const classification = window.classifyContentItem(item);
+  const isMovie = classification.isMovie;
+  const episodes = Array.isArray(item.episodes) ? item.episodes : (item.video || item.altUrl ? [{ title: "الحلقة 1", video: item.video || "", altUrl: item.altUrl || "" }] : []);
+  const hasWatchLink = classification.hasWatchLink;
 
-  // Mandatory login verification before watching anime, animation, or movie
-  if (!window.isUserLoggedIn()) {
-    window.showWatchAuthPrompt(fid, { type: isMovie ? "watch" : "episodes", fid: fid, idx: 0 });
+  // Case 1: Standalone Movie (فيلم مستقل حقيقي)
+  if (isMovie) {
+    if (!hasWatchLink && episodes.length === 0) {
+      alert("لا يتوفر رابط مشاهدة مضاف حالياً لهذا الفيلم — سيتم إضافته قريباً!");
+      return;
+    }
+
+    // Mandatory login verification before watching
+    if (!window.isUserLoggedIn()) {
+      window.showWatchAuthPrompt(fid, { type: "watch", fid: fid, idx: 0 });
+      return;
+    }
+
+    // Start movie playback directly according to existing movie behavior
+    window.watchEpisode(fid, 0);
     return;
   }
 
-  if (isMovie) {
-    let hasMovieLink = Boolean((item.video || "").trim() || (item.altUrl || "").trim() || (episodes.length > 0 && (episodes[0].video || episodes[0].altUrl)));
-    if (hasMovieLink) {
-      window.watchEpisode(fid, 0);
-    } else {
-      alert("لا يتوفر رابط مشاهدة مضاف حالياً لهذا الفيلم — سيتم إضافته قريباً!");
-    }
-  } else {
-    if (episodes.length === 0 && !item.video && !item.altUrl) {
-      alert("لا توجد حلقات مضافة حالياً لهذا العمل — سيتم إضافة الحلقات قريباً!");
-    } else {
-      window.openEpisodesPage(fid);
-    }
+  // Case 2: Anime, Series, or Episodic Animation (أنمي، مسلسلات، أنميشن مسلسلي)
+  if (!hasWatchLink && episodes.length === 0) {
+    alert("لا توجد حلقات مضافة حالياً لهذا العمل — سيتم إضافة الحلقات قريباً!");
+    return;
   }
+
+  // Mandatory login verification before opening episodes list
+  if (!window.isUserLoggedIn()) {
+    window.showWatchAuthPrompt(fid, { type: "episodes", fid: fid });
+    return;
+  }
+
+  // Always navigate to the episodes page displaying all available episodes (DO NOT play episode 1 directly)
+  window.openEpisodesPage(fid);
 };
 
 window.openEpisodesPage = function(fid) {
@@ -8934,7 +9122,7 @@ function dispatchNamedPageRender(p) {
   else if (p === "manga") renderMangaPage();
   else if (p === "seasons") renderSeasonsPage();
   else if (p === "stats") renderStatsPage();
-  else if (p === "coming") renderComingSoonPage();
+  else if (p === "coming" || p === "coming-soon") renderComingSoonPage();
   else if (p === "mylist") renderMyListPage();
   else if (p === "history") renderHistoryPage();
   else if (p === "characters") renderCharactersPage();
